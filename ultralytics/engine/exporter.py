@@ -501,7 +501,7 @@ class Exporter:
                 batch_size,  self.args.topk_all, 4,
                 batch_size,  self.args.topk_all,  
                 batch_size,  self.args.topk_all, 
-                batch_size,  self.args.topk_all, self.imgsz[0] * self.imgsz[1] / 16]
+                batch_size,  self.args.topk_all, int(self.imgsz[0] * self.imgsz[1] / 16)]
         
         dynamic_axes.update(output_axes)
     
