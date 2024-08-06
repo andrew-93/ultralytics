@@ -501,11 +501,11 @@ class Exporter:
                 batch_size,  self.args.topk_all, 4,
                 batch_size,  self.args.topk_all,  
                 batch_size,  self.args.topk_all, 
-                batch_size,  self.args.topk_all, self.args.mask_resolution * self.args.mask_resolution]
+                batch_size,  self.args.topk_all, self.imgsz[0] * self.imgsz[1] / 16]
         
         dynamic_axes.update(output_axes)
     
-        self.model = End2End_TRT(self.model, self.args.class_agnostic, self.args.topk_all, self.args.iou_thres, self.args.conf_thres, self.args.mask_resolution, self.args.pooler_scale, self.args.sampling_ratio, None ,self.args.device, labels, is_det_model )
+        self.model = End2End_TRT(self.model, self.args.class_agnostic, self.args.topk_all, self.args.iou_thres, self.args.conf_thres, self.args.mask_resolution, self.args.pooler_scale, self.args.sampling_ratio, None ,self.args.device, labels, is_det_model, self.imgsz)
 
         torch.onnx.export(self.model.cpu(), 
                             self.im.cpu() , 
@@ -1678,7 +1678,7 @@ class ONNX_EfficientNMSX_TRT(torch.nn.Module):
 
 class End2End_TRT(torch.nn.Module):
     '''export onnx or tensorrt model with NMS operation.'''
-    def __init__(self, model, class_agnostic=False, max_obj=100, iou_thres=0.45, score_thres=0.25, mask_resolution=56, pooler_scale=0.25, sampling_ratio=0, max_wh=None, device=None, n_classes=80, is_det_model=True):
+    def __init__(self, model, class_agnostic=False, max_obj=100, iou_thres=0.45, score_thres=0.25, mask_resolution=56, pooler_scale=0.25, sampling_ratio=0, max_wh=None, device=None, n_classes=80, is_det_model=True, imgsz=(640, 640)):
         super().__init__()
         device = device if device else torch.device('cpu')
         assert isinstance(max_wh,(int)) or max_wh is None
@@ -1689,7 +1689,7 @@ class End2End_TRT(torch.nn.Module):
             self.end2end = self.patch_model(class_agnostic, max_obj, iou_thres, score_thres, max_wh, device, n_classes)
         else:
             self.patch_model = ONNX_End2End_MASK_TRT 
-            self.end2end = self.patch_model(class_agnostic, max_obj, iou_thres, score_thres, mask_resolution, pooler_scale, sampling_ratio, max_wh, device, n_classes) 
+            self.end2end = self.patch_model(class_agnostic, max_obj, iou_thres, score_thres, mask_resolution, pooler_scale, sampling_ratio, max_wh, device, n_classes, int(imgsz[0] / 4), int(imgsz[1] / 4)) 
         self.end2end.eval()
 
     def forward(self, x):
@@ -1711,7 +1711,9 @@ class ONNX_End2End_MASK_TRT(torch.nn.Module):
         sampling_ratio=0,
         max_wh=None,
         device=None,
-        n_classes=80
+        n_classes=80,
+        mask_h = 160,
+        mask_w = 160
     ):
         super().__init__()
         assert isinstance(max_wh,(int)) or max_wh is None
@@ -1729,6 +1731,8 @@ class ONNX_End2End_MASK_TRT(torch.nn.Module):
         self.mask_resolution = mask_resolution
         self.pooler_scale = pooler_scale
         self.sampling_ratio = sampling_ratio
+        self.mask_width = mask_w
+        self.mask_height = mask_h
        
     def forward(self, x):
         det=x[0]
@@ -1761,6 +1765,9 @@ class ONNX_End2End_MASK_TRT(torch.nn.Module):
         batch_indices = batch_indices.view(total_object).to(torch.long)
         det_indices = det_indices.view(total_object).to(torch.long)
         det_masks = masks[batch_indices, det_indices]
+        print("\n self.mask_resolution (it doesn't matter!): ", self.mask_resolution)
+        print("self.mask_width: ", self.mask_width)
+        print("self.mask_height: ", self.mask_height, '\n')
 
 
         pooled_proto = TRT_ROIAlign.apply(  proto,
@@ -1768,19 +1775,19 @@ class ONNX_End2End_MASK_TRT(torch.nn.Module):
                                             batch_indices,
                                             1,
                                             1,
-                                            self.mask_resolution,
-                                            self.mask_resolution,
+                                            self.mask_height,
+                                            self.mask_width,
                                             self.sampling_ratio,
                                             self.pooler_scale
                                         )
         pooled_proto = pooled_proto.view(
-            total_object, nm, self.mask_resolution * self.mask_resolution,
+            total_object, nm, self.mask_width * self.mask_height,
         )
 
         det_masks = (
             torch.matmul(det_masks.unsqueeze(dim=1), pooled_proto)
             .sigmoid()
-            .view(batch_size, self.max_obj, self.mask_resolution * self.mask_resolution)
+            .view(batch_size, self.max_obj, self.mask_width * self.mask_height)
         )
 
         return num_det, det_boxes, det_scores, det_classes, det_masks
