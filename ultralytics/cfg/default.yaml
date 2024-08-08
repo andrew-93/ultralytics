@@ -86,6 +86,10 @@ opset: # (int, optional) ONNX: opset version
 workspace: 4 # (int) TensorRT: workspace size (GB)
 nms: False # (bool) CoreML: add NMS
 topk_all: 100
+bhwc_for_det_masks: False # for levipereira's code (BCHW in det_masks) use False...
+#...For andrew-93's inference use True (i.e. BHWC in 'det_masks' output)...
+#.. This parameter affects the order (sequence) of element values in det_masks, but does not affect the det_masks's shape
+
 iou_thres: 0.45
 conf_thres: 0.25
 class_agnostic: False

@@ -505,7 +505,7 @@ class Exporter:
         
         dynamic_axes.update(output_axes)
     
-        self.model = End2End_TRT(self.model, self.args.class_agnostic, self.args.topk_all, self.args.iou_thres, self.args.conf_thres, self.args.mask_resolution, self.args.pooler_scale, self.args.sampling_ratio, None ,self.args.device, labels, is_det_model, self.imgsz)
+        self.model = End2End_TRT(self.model, self.args.class_agnostic, self.args.topk_all, self.args.iou_thres, self.args.conf_thres, self.args.mask_resolution, self.args.pooler_scale, self.args.sampling_ratio, None ,self.args.device, labels, is_det_model, self.imgsz, self.args.bhwc_for_det_masks)
 
         torch.onnx.export(self.model.cpu(), 
                             self.im.cpu() , 
@@ -1562,7 +1562,9 @@ class TRT_ROIAlign(torch.autograd.Function):
         device = rois.device
         dtype = rois.dtype
         N, C, H, W = X.shape
+        #print("\n N, C, H, W: ", N, C, H, W)
         num_rois = rois.shape[0]
+        #print("\n num_rois, C, output_height, output_width: ", num_rois, C, output_height, output_width, '\n')
         return torch.randn((num_rois, C, output_height, output_width), device=device, dtype=dtype)
 
     @staticmethod
@@ -1678,7 +1680,7 @@ class ONNX_EfficientNMSX_TRT(torch.nn.Module):
 
 class End2End_TRT(torch.nn.Module):
     '''export onnx or tensorrt model with NMS operation.'''
-    def __init__(self, model, class_agnostic=False, max_obj=100, iou_thres=0.45, score_thres=0.25, mask_resolution=56, pooler_scale=0.25, sampling_ratio=0, max_wh=None, device=None, n_classes=80, is_det_model=True, imgsz=(640, 640)):
+    def __init__(self, model, class_agnostic=False, max_obj=100, iou_thres=0.45, score_thres=0.25, mask_resolution=56, pooler_scale=0.25, sampling_ratio=0, max_wh=None, device=None, n_classes=80, is_det_model=True, imgsz=(640, 640), bhwc_for_det_masks=False):
         super().__init__()
         device = device if device else torch.device('cpu')
         assert isinstance(max_wh,(int)) or max_wh is None
@@ -1689,7 +1691,7 @@ class End2End_TRT(torch.nn.Module):
             self.end2end = self.patch_model(class_agnostic, max_obj, iou_thres, score_thres, max_wh, device, n_classes)
         else:
             self.patch_model = ONNX_End2End_MASK_TRT 
-            self.end2end = self.patch_model(class_agnostic, max_obj, iou_thres, score_thres, mask_resolution, pooler_scale, sampling_ratio, max_wh, device, n_classes, int(imgsz[0] / 4), int(imgsz[1] / 4)) 
+            self.end2end = self.patch_model(class_agnostic, max_obj, iou_thres, score_thres, mask_resolution, pooler_scale, sampling_ratio, max_wh, device, n_classes, int(imgsz[0] / 4), int(imgsz[1] / 4), bhwc_for_det_masks) 
         self.end2end.eval()
 
     def forward(self, x):
@@ -1713,7 +1715,8 @@ class ONNX_End2End_MASK_TRT(torch.nn.Module):
         device=None,
         n_classes=80,
         mask_h = 160,
-        mask_w = 160
+        mask_w = 160,
+        bhwc_for_det_masks=False
     ):
         super().__init__()
         assert isinstance(max_wh,(int)) or max_wh is None
@@ -1733,6 +1736,7 @@ class ONNX_End2End_MASK_TRT(torch.nn.Module):
         self.sampling_ratio = sampling_ratio
         self.mask_width = mask_w
         self.mask_height = mask_h
+        self.bhwc_for_det_masks = bhwc_for_det_masks
        
     def forward(self, x):
         det=x[0]
@@ -1789,5 +1793,13 @@ class ONNX_End2End_MASK_TRT(torch.nn.Module):
             .sigmoid()
             .view(batch_size, self.max_obj, self.mask_width * self.mask_height)
         )
-
+        if (self.bhwc_for_det_masks):
+            print("\n\n *********************************** !ATTENTION! ***********************************")
+            print(" You set the argument 'bhwc_for_det_masks = True' in config yaml-file.")
+            print(" It means that the values of elements in 'det_masks' output will be follow in a non-standard order (as for BHWC, not for BCHW).")
+            print(" But the output dimension will remain the same (BCHW) \n\n")
+            det_masks = det_masks.reshape([batch_size, self.max_obj, self.mask_height, self.mask_width])
+            det_masks = det_masks.permute(0, 2, 3, 1)
+            det_masks = det_masks.reshape(batch_size, self.max_obj, self.mask_width * self.mask_height)
+            #print("\n det_masks.shape: ", det_masks.shape)
         return num_det, det_boxes, det_scores, det_classes, det_masks
