@@ -1779,8 +1779,8 @@ class ONNX_End2End_MASK_TRT(torch.nn.Module):
                                             batch_indices,
                                             1,
                                             1,
-                                            self.mask_height,
                                             self.mask_width,
+                                            self.mask_height,
                                             self.sampling_ratio,
                                             self.pooler_scale
                                         )
